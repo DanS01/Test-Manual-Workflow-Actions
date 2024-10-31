@@ -16,7 +16,7 @@ spec:
             version: 2.0.22
           - name: kafka-connect-http
             owner: confluentinc
-            version: 1.5.0
+            version: 1.7.7
           - name: kafka-connect-azure-blob-storage
             owner: confluentinc
             version: 1.6.24
