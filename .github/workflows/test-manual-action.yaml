@@ -3,13 +3,522 @@ name: Test Manual Action
 
 on:
   workflow_dispatch:
-          
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  GITHUB_ACTIONS_BOT_NAME: github-actions[bot]
+  GITHUB_ACTIONS_BOT_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+#  KAFKA_CONNECT_BASE_CONFIGURATION_FILE: apps/kafka-connect/base/connect.yaml
+  KAFKA_CONNECT_BASE_CONFIGURATION_FILE: src/config.yaml
+#  REPOSITORY_BASE_BRANCH: main
+  REPOSITORY_BASE_BRANCH: feature/test-patching-workflow
+
 jobs:
-  test:
-    name: Test
+  analyze-connector-plugin-configuration:
+    name: Analyze Connector Plugin Configuration
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    outputs:
+      connector-count: ${{ steps.fetch-connector-details.outputs.connector-count }}
+      connector-list: ${{ steps.fetch-connector-details.outputs.connector-list }}
+      connector-owners: ${{ steps.fetch-connector-details.outputs.connector-owners }}
+      connector-versions: ${{ steps.fetch-connector-details.outputs.connector-versions }}
+      connector-versions-confluenthub: ${{ steps.fetch-connector-versions-confluenthub.outputs.connector-versions }}
+      connector-list-to-patch: ${{ steps.compare-connector-versions.outputs.connector-list-to-patch }}
     steps:
-      - name: Print to Console
+      - name: Checkout Kafka Connect Base Configuration File
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            ${{ env.KAFKA_CONNECT_BASE_CONFIGURATION_FILE }}
+          sparse-checkout-cone-mode: false
+
+      - name: Fetch Connector Details from Kafka Connect Configuration
+        id: fetch-connector-details
+        shell: bash
         run: |
-            echo "Hello World!"
+          CONNECTOR_PLUGINS_LIST_CONFIG="$(yq eval -o=json '.spec.build.onDemand.plugins.confluentHub' $KAFKA_CONNECT_BASE_CONFIGURATION_FILE)"
+
+          CONNECTOR_COUNT="$(echo "$CONNECTOR_PLUGINS_LIST_CONFIG" | jq length)"
+          echo "Connector Count: $CONNECTOR_COUNT"
+
+          CONNECTOR_PACKAGE_LIST=""
+          CONNECTOR_OWNER_LIST=""
+          CONNECTOR_VERSION_LIST=""
+
+          for ((i=0; i<$CONNECTOR_COUNT; i++));
+          do
+            CONNECTOR_NAME="$(echo $CONNECTOR_PLUGINS_LIST_CONFIG | jq --raw-output --argjson index $i '.[$index] | .name')"
+            CONNECTOR_OWNER="$(echo $CONNECTOR_PLUGINS_LIST_CONFIG | jq --raw-output --argjson index $i '.[$index] | .owner')"
+            CONNECTOR_VERSION="$(echo $CONNECTOR_PLUGINS_LIST_CONFIG | jq --raw-output --argjson index $i '.[$index] | .version')"
+            echo "$i = [ Name: $CONNECTOR_NAME , Owner: $CONNECTOR_OWNER , Version: $CONNECTOR_VERSION ]"
+
+            if [ -z "$CONNECTOR_PACKAGE_LIST" ];
+            then
+              CONNECTOR_PACKAGE_LIST="$CONNECTOR_NAME"
+            else
+              CONNECTOR_PACKAGE_LIST+=" $CONNECTOR_NAME"
+            fi
+
+            if [ -z "$CONNECTOR_OWNER_LIST" ];
+            then
+              CONNECTOR_OWNER_LIST="$CONNECTOR_OWNER"
+            else
+              CONNECTOR_OWNER_LIST+=" $CONNECTOR_OWNER"
+            fi
+
+            if [ -z "$CONNECTOR_VERSION_LIST" ];
+            then
+              CONNECTOR_VERSION_LIST="$CONNECTOR_VERSION"
+            else
+              CONNECTOR_VERSION_LIST+=" $CONNECTOR_VERSION"
+            fi
+          done
+
+          echo "connector-count=$CONNECTOR_COUNT" >> $GITHUB_OUTPUT
+          echo "connector-list=$CONNECTOR_PACKAGE_LIST" >> $GITHUB_OUTPUT
+          echo "connector-owners=$CONNECTOR_OWNER_LIST" >> $GITHUB_OUTPUT
+          echo "connector-versions=$CONNECTOR_VERSION_LIST" >> $GITHUB_OUTPUT
+
+      - name: Fetch Connector Versions from Confluent Hub
+        id: fetch-connector-versions-confluenthub
+        shell: bash
+        run: |
+          CONNECTOR_COUNT="${{ steps.fetch-connector-details.outputs.connector-count }}"
+          CONNECTOR_PACKAGE_LIST="${{ steps.fetch-connector-details.outputs.connector-list }}"
+          CONNECTOR_PACKAGE_LIST=($CONNECTOR_PACKAGE_LIST)
+          CONNECTOR_OWNERS="${{ steps.fetch-connector-details.outputs.connector-owners }}"
+          CONNECTOR_OWNERS=($CONNECTOR_OWNERS)
+          CONNECTOR_VERSIONS="${{ steps.fetch-connector-details.outputs.connector-versions }}"
+          CONNECTOR_VERSIONS=($CONNECTOR_VERSIONS)
+
+          CONNECTOR_VERSION_LIST_CONFLUENTHUB=""
+
+          for ((i=0; i<$CONNECTOR_COUNT; i++));
+          do
+            if [ ! -z "$CONNECTOR_VERSION_LIST_CONFLUENTHUB" ];
+            then
+              echo ""
+            fi
+            echo "Fetching ${CONNECTOR_PACKAGE_LIST[$i]} connector version from Confluent Hub..."
+
+            CONFLUENT_HUB_CONNECTOR_PAGE=$(curl -L "https://www.confluent.io/hub/${CONNECTOR_OWNERS[$i]}/${CONNECTOR_PACKAGE_LIST[$i]}")
+            VERSION_HTML_LINE=$(echo "$CONFLUENT_HUB_CONNECTOR_PAGE" | grep "Version ")
+
+            # The substrings to use for matching and processing that result in the output being the string in-between these substrings
+            stringVersionStart="Version <!-- -->"
+            stringVersionEnd="</div>"
+
+            VERSION="${VERSION_HTML_LINE#*${stringVersionStart}}"
+            VERSION="${VERSION//${stringVersionEnd}*}"
+            echo "Confluent Hub Version: $VERSION"
+
+            if [ ${CONNECTOR_PACKAGE_LIST[$i]} = "kafka-connect-jdbc" ];
+            then
+              VERSION="10.8.1"
+              echo "Version Override: $VERSION"
+            fi
+
+            if [ -z "$CONNECTOR_VERSION_LIST_CONFLUENTHUB" ];
+            then
+              CONNECTOR_VERSION_LIST_CONFLUENTHUB="$VERSION"
+            else
+              CONNECTOR_VERSION_LIST_CONFLUENTHUB+=" $VERSION"
+            fi
+          done
+
+          echo "connector-versions=$CONNECTOR_VERSION_LIST_CONFLUENTHUB" >> $GITHUB_OUTPUT
+
+      - name: Compare Connector Versions and Determine Connectors to Patch
+        id: compare-connector-versions
+        shell: bash
+        run: |
+          CONNECTOR_COUNT="${{ steps.fetch-connector-details.outputs.connector-count }}"
+          CONNECTOR_PACKAGE_LIST="${{ steps.fetch-connector-details.outputs.connector-list }}"
+          CONNECTOR_PACKAGE_LIST=($CONNECTOR_PACKAGE_LIST)
+          CONNECTOR_VERSIONS="${{ steps.fetch-connector-details.outputs.connector-versions }}"
+          CONNECTOR_VERSIONS=($CONNECTOR_VERSIONS)
+          CONNECTOR_VERSIONS_CONFLUENTHUB="${{ steps.fetch-connector-versions-confluenthub.outputs.connector-versions }}"
+          CONNECTOR_VERSIONS_CONFLUENTHUB=($CONNECTOR_VERSIONS_CONFLUENTHUB)
+
+          CONNECTOR_NAMES_TO_PATCH=""
+
+          for ((i=0; i<$CONNECTOR_COUNT; i++));
+          do
+            echo "$i = [ Name: ${CONNECTOR_PACKAGE_LIST[$i]} , Config Version: ${CONNECTOR_VERSIONS[$i]} , Confluent Hub Version: ${CONNECTOR_VERSIONS_CONFLUENTHUB[$i]} ]"
+
+            if [ "${CONNECTOR_VERSIONS[$i]}" != "${CONNECTOR_VERSIONS_CONFLUENTHUB[$i]}" ]; then
+              echo "Versions are different"
+
+              if [ -z "$CONNECTOR_NAMES_TO_PATCH" ];
+              then
+                CONNECTOR_NAMES_TO_PATCH="${CONNECTOR_PACKAGE_LIST[$i]}"
+              else
+                CONNECTOR_NAMES_TO_PATCH+=" ${CONNECTOR_PACKAGE_LIST[$i]}"
+              fi
+            else
+              echo "Versions are the same"
+
+              if [ -z "$CONNECTOR_NAMES_TO_PATCH" ];
+              then
+                CONNECTOR_NAMES_TO_PATCH="NULL"
+              else
+                CONNECTOR_NAMES_TO_PATCH+=" NULL"
+              fi
+            fi
+          done
+
+          echo "connector-list-to-patch=$CONNECTOR_NAMES_TO_PATCH" >> $GITHUB_OUTPUT
+
+          echo ""
+          echo "List of connectors to be patched:"
+          CONNECTOR_NAMES_TO_PATCH=($CONNECTOR_NAMES_TO_PATCH)
+          for ((i=0; i<$CONNECTOR_COUNT; i++));
+          do
+            if [ "${CONNECTOR_NAMES_TO_PATCH[$i]}" != "NULL" ];
+            then
+              echo "${CONNECTOR_PACKAGE_LIST[$i]}"
+            fi
+          done
+
+  manage-connector-version-patching-notifications:
+    name: Manage Connector Version Patching Notifications
+    runs-on: ubuntu-latest
+    needs: analyze-connector-plugin-configuration
+    timeout-minutes: 60
+    outputs:
+      branches-to-create: ${{ steps.repo-branch-patch-state.outputs.branches-to-create }}
+      pull-requests-to-update: ${{ steps.repo-branch-patch-state.outputs.pull-requests-to-update }}
+    steps:
+      - name: Verify CLI Tools
+        shell: bash
+        run: |
+          # Check if Git CLI exists, if not then install it
+          echo "Cheking Git..."
+          WHICH_GIT=$(which git)
+          if [ -z "$WHICH_GIT" ];
+          then
+            echo "Git is not installed"
+            sudo apt-get install -y git
+            git --version
+            PATH=$PATH:$(which git)
+            echo "Path is ... $PATH"
+          else
+            echo "Git is installed"
+            git --version
+          fi
+
+          # Check if yq CLI exists, if not then install it (specifically the mikefarah one)
+          echo "Checking yq..."
+          WHICH_YQ=$(which yq)
+          if [ -z "$WHICH_YQ" ];
+          then
+            echo "yq is not installed"
+            sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq && sudo chmod +x /usr/bin/yq
+            yq --version
+            PATH=$PATH:$(which yq)
+            echo "Path is ... $PATH"
+          else
+            echo "yq is installed"
+            yq --version
+          fi
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: '0'
+
+      - name: Compare Repository Branches and Determine Required Patch State
+        id: repo-branch-patch-state
+        shell: bash
+        run: |
+          CONNECTOR_COUNT="${{ needs.analyze-connector-plugin-configuration.outputs.connector-count }}"
+          CONNECTOR_LIST_TO_PATCH="${{ needs.analyze-connector-plugin-configuration.outputs.connector-list-to-patch }}"
+          CONNECTOR_LIST_TO_PATCH=($CONNECTOR_LIST_TO_PATCH)
+
+          echo "GitHub Repository: ${{ github.repository }}"
+
+          #REPO_BRANCHES=$(curl --silent -H "Accept: application/vnd.github.v3+json" "https://api.github.com/repos/DanS01/Github-Actions/branches")
+          REPO_BRANCHES=$(curl --silent -H "Accept: application/vnd.github.v3+json" "https://api.github.com/repos/${{ github.repository }}/branches")
+
+          #REPO_PULL_REQUESTS=$(curl --silent -H "Accept: application/vnd.github.v3+json" "https://api.github.com/repos/DanS01/Github-Actions/pulls")
+          REPO_PULL_REQUESTS=$(curl --silent -H "Accept: application/vnd.github.v3+json" "https://api.github.com/repos/${{ github.repository }}/pulls")
+
+          BRANCHES_TO_CREATE=""
+          PULL_REQUESTS_TO_UPDATE=""
+
+          for ((i=0; i<$CONNECTOR_COUNT; i++));
+          do
+            if [ "${CONNECTOR_LIST_TO_PATCH[$i]}" == "NULL" ];
+            then
+              if [ -z "$BRANCHES_TO_CREATE" ];
+              then
+                BRANCHES_TO_CREATE="NULL"
+              else
+                BRANCHES_TO_CREATE+=" NULL"
+              fi
+
+              if [ -z "$PULL_REQUESTS_TO_UPDATE" ];
+              then
+                PULL_REQUESTS_TO_UPDATE="NULL"
+              else
+                PULL_REQUESTS_TO_UPDATE+=" NULL"
+              fi
+            else
+              echo "Checking patch state for connector ${CONNECTOR_LIST_TO_PATCH[$i]}"
+
+              BRANCH_NAME="gha/connector-patching/${CONNECTOR_LIST_TO_PATCH[$i]}"
+              echo "Branch Name: $BRANCH_NAME"
+
+              REPO_PATCH_BRANCH_NAME=$(echo "$REPO_BRANCHES" | jq --raw-output '.[] | select(.name == '\""${BRANCH_NAME}\""') | .name')
+
+              if [ -z "$REPO_PATCH_BRANCH_NAME" ]; then
+                echo "Branch does not exist in repository"
+
+                if [ -z "$BRANCHES_TO_CREATE" ];
+                then
+                  BRANCHES_TO_CREATE="$BRANCH_NAME"
+                  PULL_REQUESTS_TO_UPDATE="NULL"
+                else
+                  BRANCHES_TO_CREATE+=" $BRANCH_NAME"
+                  PULL_REQUESTS_TO_UPDATE+=" NULL"
+                fi
+              else
+                echo "Branch exists in repository"
+
+                if [ -z "$BRANCHES_TO_CREATE" ];
+                then
+                  BRANCHES_TO_CREATE="NULL"
+                else
+                  BRANCHES_TO_CREATE+=" NULL"
+                fi
+
+                REPO_PATCH_PULLREQUEST_NUMBER=$(echo "$REPO_PULL_REQUESTS" | jq --raw-output '.[] | select(.head.ref == '\""${BRANCH_NAME}"\"') | .number')
+
+                if [ -z "$REPO_PATCH_PULLREQUEST_NUMBER" ]; then
+                  echo "Pull Request does not exist in repository"
+
+                  if [ -z "$PULL_REQUESTS_TO_UPDATE" ];
+                  then
+                    PULL_REQUESTS_TO_UPDATE="NULL"
+                  else
+                    PULL_REQUESTS_TO_UPDATE+=" NULL"
+                  fi
+                else
+                  echo "Pull Request exists in repository as PR#$REPO_PATCH_PULLREQUEST_NUMBER"
+
+                  if [ -z "$PULL_REQUESTS_TO_UPDATE" ];
+                  then
+                    PULL_REQUESTS_TO_UPDATE="$REPO_PATCH_PULLREQUEST_NUMBER"
+                  else
+                    PULL_REQUESTS_TO_UPDATE+=" $REPO_PATCH_PULLREQUEST_NUMBER"
+                  fi
+                fi
+              fi
+            fi
+          done
+
+          echo "branches-to-create=$BRANCHES_TO_CREATE" >> $GITHUB_OUTPUT
+          echo "pull-requests-to-update=$PULL_REQUESTS_TO_UPDATE" >> $GITHUB_OUTPUT
+
+          echo ""
+          echo "List of branches to create:"
+          BRANCHES_TO_CREATE=($BRANCHES_TO_CREATE)
+          for ((i=0; i<$CONNECTOR_COUNT; i++));
+          do
+            if [ "${BRANCHES_TO_CREATE[$i]}" != "NULL" ];
+            then
+              echo "${BRANCHES_TO_CREATE[$i]}"
+            fi
+          done
+
+          echo ""
+          echo "List of pull requests to update:"
+          PULL_REQUESTS_TO_UPDATE=($PULL_REQUESTS_TO_UPDATE)
+          for ((i=0; i<$CONNECTOR_COUNT; i++));
+          do
+            if [ "${PULL_REQUESTS_TO_UPDATE[$i]}" != "NULL" ];
+            then
+              echo "PR#${PULL_REQUESTS_TO_UPDATE[$i]}"
+            fi
+          done
+
+      - name: Create New Patches
+        id: create-new-patches
+        shell: bash
+        run: |
+          echo "Hello World!"
+
+          CONNECTOR_COUNT="${{ needs.analyze-connector-plugin-configuration.outputs.connector-count }}"
+          echo "Connector Count: $CONNECTOR_COUNT"
+          CONNECTOR_LIST_TO_PATCH="${{ needs.analyze-connector-plugin-configuration.outputs.connector-list-to-patch }}"
+          echo "Connector List to Patch: $CONNECTOR_LIST_TO_PATCH"
+          CONNECTOR_LIST_TO_PATCH=($CONNECTOR_LIST_TO_PATCH)
+          CONNECTOR_VERSIONS="${{ needs.analyze-connector-plugin-configuration.outputs.connector-versions }}"
+          echo "Connector Versions: $CONNECTOR_VERSIONS"
+          CONNECTOR_VERSIONS=($CONNECTOR_VERSIONS)
+          CONNECTOR_VERSIONS_CONFLUENTHUB="${{ needs.analyze-connector-plugin-configuration.outputs.connector-versions-confluenthub }}"
+          echo "Connector Versions Confluent Hub: $CONNECTOR_VERSIONS_CONFLUENTHUB"
+          CONNECTOR_VERSIONS_CONFLUENTHUB=($CONNECTOR_VERSIONS_CONFLUENTHUB)
+          BRANCHES_TO_CREATE="${{ steps.repo-branch-patch-state.outputs.branches-to-create }}"
+          echo "Branches to Create: $BRANCHES_TO_CREATE"
+          VALID_BRANCH_COUNT=$(echo "$BRANCHES_TO_CREATE" | tr " " "\n" | grep -v -c "NULL")
+          BRANCHES_TO_CREATE=($BRANCHES_TO_CREATE)
+
+          echo "${{ github.actor }}"
+          echo "${{ github.actor_id }}"
+          echo "$GITHUB_ACTIONS_BOT_NAME"
+          echo "$GITHUB_ACTIONS_BOT_EMAIL"
+
+          ls -a src/
+
+          git --version
+          git branch
+          git fetch -a
+
+          #SEARCH_STR="config.yaml"
+          #REPLACEMENT_STR="config-original.yaml"
+          #KAFKA_CONNECT_BASE_CONFIGURATION_BACKUP_FILE=${KAFKA_CONNECT_BASE_CONFIGURATION_FILE/$SEARCH_STR/$REPLACEMENT_STR}
+          #echo "Kafka Connect Base Configuration Backup File: $KAFKA_CONNECT_BASE_CONFIGURATION_BACKUP_FILE"
+
+          #cp $KAFKA_CONNECT_BASE_CONFIGURATION_FILE $KAFKA_CONNECT_BASE_CONFIGURATION_BACKUP_FILE
+
+          ls -a src/
+
+          echo "Valid Branch Count: $VALID_BRANCH_COUNT"
+
+          if [ $VALID_BRANCH_COUNT -eq 0 ];
+          then
+              echo "No branches / pull requests to create"
+          fi
+
+          for ((i=0; i<$CONNECTOR_COUNT; i++));
+          do
+            if [ "${BRANCHES_TO_CREATE[$i]}" != "NULL" ];
+            then
+              echo "Creating branch ${BRANCHES_TO_CREATE[$i]}..."
+              git checkout -b "${BRANCHES_TO_CREATE[$i]}" origin/"$REPOSITORY_BASE_BRANCH"
+              git branch
+
+              echo "Applying changes to configuration file..."
+              echo "New version to apply: ${CONNECTOR_VERSIONS_CONFLUENTHUB[$i]}"
+
+              export CHUB_CONNECTOR_NAME="${CONNECTOR_LIST_TO_PATCH[$i]}"
+              export CHUB_VERSION="${CONNECTOR_VERSIONS_CONFLUENTHUB[$i]}"
+
+              yq eval -i '(.spec.build.onDemand.plugins.confluentHub[] | select(.name == env(CHUB_CONNECTOR_NAME)).version) |= env(CHUB_VERSION)' $KAFKA_CONNECT_BASE_CONFIGURATION_FILE
+
+              echo "Committing changes to branch..."
+              git config user.name "$GITHUB_ACTIONS_BOT_NAME"
+              git config user.email "$GITHUB_ACTIONS_BOT_EMAIL"
+              git add "$KAFKA_CONNECT_BASE_CONFIGURATION_FILE"
+              git commit -m "Update ${CONNECTOR_LIST_TO_PATCH[$i]} connector version to ${CONNECTOR_VERSIONS_CONFLUENTHUB[$i]}"
+              echo "Pushing committed changes to remote branch..."
+              git push -u origin "${BRANCHES_TO_CREATE[$i]}"
+
+              echo "Creating pull request of changes..."
+              echo "Base Branch: $REPOSITORY_BASE_BRANCH"
+              PULL_REQUEST_TITLE="Patch ${CONNECTOR_LIST_TO_PATCH[$i]} Connector Version from ${CONNECTOR_VERSIONS[$i]} to ${CONNECTOR_VERSIONS_CONFLUENTHUB[$i]}"
+              echo "Title: $PULL_REQUEST_TITLE"
+              PULL_REQUEST_BODY="$PULL_REQUEST_TITLE in $KAFKA_CONNECT_BASE_CONFIGURATION_FILE"
+              echo "Body: $PULL_REQUEST_BODY"
+              echo "TODO"
+
+              REPO_BRANCHES=$(curl --silent -H "Accept: application/vnd.github.v3+json" "https://api.github.com/repos/${{ github.repository }}/branches")
+              echo "$REPO_BRANCHES"
+
+              git fetch -a
+
+              REPO_BRANCHES=$(curl --silent -H "Accept: application/vnd.github.v3+json" "https://api.github.com/repos/${{ github.repository }}/branches")
+              echo "$REPO_BRANCHES"
+
+              #CREATED_PULL_REQUEST=$( curl --silent -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "Accept: application/vnd.github.v3+json" "https://api.github.com/repos/${{ github.repository }}/pulls" -d '{"title":'\""$PULL_REQUEST_TITLE"\"',"body":'\""$PULL_REQUEST_BODY"\"',"head":'\""${BRANCHES_TO_CREATE[$i]}"\"',"base":'\""$REPOSITORY_BASE_BRANCH"\"',"draft":false}' )
+              CREATED_PULL_REQUEST=$( curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "Accept: application/vnd.github.v3+json" "https://api.github.com/repos/${{ github.repository }}/pulls" -d '{"title":'\""$PULL_REQUEST_TITLE"\"',"body":'\""$PULL_REQUEST_BODY"\"',"head":'\""${BRANCHES_TO_CREATE[$i]}"\"',"base":'\""$REPOSITORY_BASE_BRANCH"\"',"draft":false}' )
+              echo "$CREATED_PULL_REQUEST"
+              PULL_REQUEST_NUMBER="$(echo $CREATED_PULL_REQUEST | jq --raw-output '.number')"
+              if [ -z "$PULL_REQUEST_NUMBER" ];
+              then
+                echo "Failed to create pull request"
+              else
+                echo "Created pull request #$PULL_REQUEST_NUMBER successfully"
+              fi
+            fi
+          done
+
+          #rm $KAFKA_CONNECT_BASE_CONFIGURATION_BACKUP_FILE
+
+          ls -a src/
+      
+      - name: Update Existing Patches
+        id: update-existing-patches
+        shell: bash
+        run: |
+          echo "Hello World!"
+
+          CONNECTOR_COUNT="${{ needs.analyze-connector-plugin-configuration.outputs.connector-count }}"
+          echo "Connector Count: $CONNECTOR_COUNT"
+          CONNECTOR_LIST_TO_PATCH="${{ needs.analyze-connector-plugin-configuration.outputs.connector-list-to-patch }}"
+          echo "Connector List to Patch: $CONNECTOR_LIST_TO_PATCH"
+          CONNECTOR_LIST_TO_PATCH=($CONNECTOR_LIST_TO_PATCH)
+          CONNECTOR_VERSIONS="${{ needs.analyze-connector-plugin-configuration.outputs.connector-versions }}"
+          echo "Connector Versions: $CONNECTOR_VERSIONS"
+          CONNECTOR_VERSIONS=($CONNECTOR_VERSIONS)
+          CONNECTOR_VERSIONS_CONFLUENTHUB="${{ needs.analyze-connector-plugin-configuration.outputs.connector-versions-confluenthub }}"
+          echo "Connector Versions Confluent Hub: $CONNECTOR_VERSIONS_CONFLUENTHUB"
+          CONNECTOR_VERSIONS_CONFLUENTHUB=($CONNECTOR_VERSIONS_CONFLUENTHUB)
+          PULL_REQUESTS_TO_UPDATE="${{ steps.repo-branch-patch-state.outputs.pull-requests-to-update }}"
+          echo "Pull Requests to Update: $PULL_REQUESTS_TO_UPDATE"
+          VALID_PULL_REQUEST_COUNT=$(echo "$PULL_REQUESTS_TO_UPDATE" | tr " " "\n" | grep -v -c "NULL")
+          PULL_REQUESTS_TO_UPDATE=($PULL_REQUESTS_TO_UPDATE)
+
+          echo "Valid Pull Request Count: $VALID_PULL_REQUEST_COUNT"
+
+          if [ $VALID_PULL_REQUEST_COUNT -eq 0 ];
+          then
+              echo "No branches / pull requests to update"
+          fi
+
+          for ((i=0; i<$CONNECTOR_COUNT; i++));
+          do
+            if [ "${PULL_REQUESTS_TO_UPDATE[$i]}" != "NULL" ];
+            then
+              echo "Updating pull request #${PULL_REQUESTS_TO_UPDATE[$i]}..."
+
+              echo "Fetching pull request branch..."
+              PULL_REQUEST=$(curl -H "Accept: application/vnd.github.v3+json" "https://api.github.com/repos/${{ github.repository }}/pulls/${PULL_REQUESTS_TO_UPDATE[$i]}")
+              PULL_REQUEST_BRANCH=$(echo "$PULL_REQUEST" | jq --raw-output '.head.ref')
+              echo "Pull Request Branch: $PULL_REQUEST_BRANCH"
+
+              echo "Checking out pull request branch..."
+              git checkout -b "$PULL_REQUEST_BRANCH" origin/"$PULL_REQUEST_BRANCH"
+              git branch
+
+              echo "Applying changes to configuration file..."
+              echo "New version to apply: ${CONNECTOR_VERSIONS_CONFLUENTHUB[$i]}"
+
+              export CHUB_CONNECTOR_NAME="${CONNECTOR_LIST_TO_PATCH[$i]}"
+              export CHUB_VERSION="${CONNECTOR_VERSIONS_CONFLUENTHUB[$i]}"
+
+              yq eval -i '(.spec.build.onDemand.plugins.confluentHub[] | select(.name == env(CHUB_CONNECTOR_NAME)).version) |= env(CHUB_VERSION)' $KAFKA_CONNECT_BASE_CONFIGURATION_FILE
+
+              echo "Committing changes to branch..."
+              git config user.name "$GITHUB_ACTIONS_BOT_NAME"
+              git config user.email "$GITHUB_ACTIONS_BOT_EMAIL"
+              git add "$KAFKA_CONNECT_BASE_CONFIGURATION_FILE"
+              git commit -m "Update ${CONNECTOR_LIST_TO_PATCH[$i]} connector version to ${CONNECTOR_VERSIONS_CONFLUENTHUB[$i]}"
+              echo "Pushing committed changes to remote branch..."
+              git push -u origin "${PULL_REQUEST_BRANCH}"
+
+              echo "Updating pull request with changes..."
+              PULL_REQUEST_TITLE="Patch ${CONNECTOR_LIST_TO_PATCH[$i]} Connector Version from ${CONNECTOR_VERSIONS[$i]} to ${CONNECTOR_VERSIONS_CONFLUENTHUB[$i]}"
+              echo "Title: $PULL_REQUEST_TITLE"
+              PULL_REQUEST_BODY="$PULL_REQUEST_TITLE in $KAFKA_CONNECT_BASE_CONFIGURATION_FILE"
+              echo "Body: $PULL_REQUEST_BODY"
+              echo "TODO"
+
+              UPDATED_PULL_REQUEST=$(curl --silent -X PATCH -H "Authorization: token ${SECRETS_TOKEN}" "Accept: application/vnd.github.v3+json" "https://api.github.com/repos/${{ github.repository }}/pulls/${PULL_REQUESTS_TO_UPDATE[$i]}" -d '{"title":'\""$PULL_REQUEST_TITLE"\"',"body":'\""PULL_REQUEST_BODY"\"'}')
+            fi
+          done

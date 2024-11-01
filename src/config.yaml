@@ -1,0 +1,41 @@
+spec:
+  build:
+    type: onDemand
+    onDemand:
+      plugins:
+        locationType: confluentHub
+        confluentHub:
+          - name: kafka-connect-jdbc
+            owner: confluentinc
+            version: 10.5.3
+          - name: kafka-connect-salesforce
+            owner: confluentinc
+            version: 2.0.22
+          - name: kafka-connect-salesforce-bulk-api
+            owner: confluentinc
+            version: 2.0.22
+          - name: kafka-connect-http
+            owner: confluentinc
+            version: 1.5.0
+          - name: kafka-connect-azure-blob-storage
+            owner: confluentinc
+            version: 1.6.24
+          - name: kafka-connect-cosmos
+            owner: microsoftcorporation
+            version: 1.15.0
+          - name: kafka-sink-azure-kusto
+            owner: microsoftcorporation
+            version: 4.1.2
+          - name: connect-transforms
+            owner: confluentinc
+            version: 1.5.0
+          - name: kafka-connect-sftp
+            owner: confluentinc
+            version: 3.2.10
+          - name: kafka-connect-azure-blob-storage-source
+            owner: confluentinc
+            version: 2.6.7
+        url:
+          - name: kafka-connect-file-pulse
+            archivePath: https://github.com/streamthoughts/kafka-connect-file-pulse/releases/download/v2.14.1/streamthoughts-kafka-connect-file-pulse-2.14.1.zip
+            checksum: b051faeecb81ae87007036f16ba982d982deb65cd6831874890b0af233740780e56d7aa09d039de9a0454485e7f7cc7421dac2855903cb984dd57e967b71ea89
