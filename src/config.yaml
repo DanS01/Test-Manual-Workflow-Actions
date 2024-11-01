@@ -7,7 +7,7 @@ spec:
         confluentHub:
           - name: kafka-connect-jdbc
             owner: confluentinc
-            version: 10.5.3
+            version: 10.8.0
           - name: kafka-connect-salesforce
             owner: confluentinc
             version: 2.0.22
