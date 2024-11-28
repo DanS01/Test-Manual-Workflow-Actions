@@ -1,0 +1,154 @@
+#!/bin/bash
+
+# https://www.confluent.io/hub/confluentinc/kafka-connect-salesforce
+# https://www.confluent.io/hub/confluentinc/kafka-connect-salesforce-bulk-api
+# https://www.confluent.io/hub/confluentinc/kafka-connect-jdbc
+# https://www.confluent.io/hub/confluentinc/kafka-connect-http
+# https://www.confluent.io/hub/confluentinc/kafka-connect-azure-blob-storage
+# https://www.confluent.io/hub/microsoftcorporation/kafka-connect-cosmos
+# https://www.confluent.io/hub/microsoftcorporation/kafka-sink-azure-kusto
+# https://www.confluent.io/hub/confluentinc/connect-transforms
+# https://www.confluent.io/hub/confluentinc/kafka-connect-sftp
+# https://www.confluent.io/hub/confluentinc/kafka-connect-azure-blob-storage-source
+
+KAFKA_CONNECT_CONFIGURATION_FILE="apps/kafka-connect/base/connect.yaml"
+
+CONNECTOR_PLUGINS_LIST_CONFIG="$(yq eval -o=json '.spec.build.onDemand.plugins.confluentHub' $KAFKA_CONNECT_CONFIGURATION_FILE)"
+CONNECTOR_COUNT="$(echo "$CONNECTOR_PLUGINS_LIST_CONFIG" | jq length)"
+echo "Connector Count: $CONNECTOR_COUNT"
+
+CONNECTOR_PACKAGE_LIST=""
+CONNECTOR_OWNER_LIST=""
+CONNECTOR_VERSION_LIST=""
+
+for ((i=0; i<$CONNECTOR_COUNT; i++));
+do
+  CONNECTOR_NAME="$(echo $CONNECTOR_PLUGINS_LIST_CONFIG | jq --raw-output --argjson index $i '.[$index] | .name')"
+  CONNECTOR_OWNER="$(echo $CONNECTOR_PLUGINS_LIST_CONFIG | jq --raw-output --argjson index $i '.[$index] | .owner')"
+  CONNECTOR_VERSION="$(echo $CONNECTOR_PLUGINS_LIST_CONFIG | jq --raw-output --argjson index $i '.[$index] | .version')"
+  echo "$i = [ Name: $CONNECTOR_NAME , Owner: $CONNECTOR_OWNER , Version: $CONNECTOR_VERSION ]"
+
+  if [ -z "$CONNECTOR_PACKAGE_LIST" ];
+  then
+    CONNECTOR_PACKAGE_LIST="$CONNECTOR_NAME"
+  else
+    CONNECTOR_PACKAGE_LIST+=" $CONNECTOR_NAME"
+  fi
+
+  if [ -z "$CONNECTOR_OWNER_LIST" ];
+  then
+    CONNECTOR_OWNER_LIST="$CONNECTOR_OWNER"
+  else
+    CONNECTOR_OWNER_LIST+=" $CONNECTOR_OWNER"
+  fi
+
+  if [ -z "$CONNECTOR_VERSION_LIST" ];
+  then
+    CONNECTOR_VERSION_LIST="$CONNECTOR_VERSION"
+  else
+    CONNECTOR_VERSION_LIST+=" $CONNECTOR_VERSION"
+  fi
+done
+
+echo "-----"
+
+CONNECTOR_PACKAGE_LIST=($CONNECTOR_PACKAGE_LIST)
+CONNECTOR_OWNER=($CONNECTOR_OWNER_LIST)
+CONNECTOR_VERSION=($CONNECTOR_VERSION_LIST)
+
+CONNECTOR_VERSION_LIST_CONFLUENTHUB=""
+
+for ((i=0; i<$CONNECTOR_COUNT; i++));
+do
+  echo "$i = [ Name: ${CONNECTOR_PACKAGE_LIST[$i]} , Owner: ${CONNECTOR_OWNER[$i]} , Version: ${CONNECTOR_VERSION[$i]} ]"
+
+  CONFLUENT_HUB_CONNECTOR_PAGE=$(curl -L "https://www.confluent.io/hub/${CONNECTOR_OWNER[$i]}/${CONNECTOR_PACKAGE_LIST[$i]}")
+  VERSION_HTML_LINE=$(echo "$CONFLUENT_HUB_CONNECTOR_PAGE" | grep "Version ")
+
+  # The substrings to use for matching and processing that result in the output being the string in-between these substrings
+  stringVersionStart="Version <!-- -->"
+  stringVersionEnd="</div>"
+
+  VERSION="${VERSION_HTML_LINE#*${stringVersionStart}}"
+  VERSION="${VERSION//${stringVersionEnd}*}"
+  echo "Confluent Hub Version: $VERSION"
+
+  if [ -z "$CONNECTOR_VERSION_LIST_CONFLUENTHUB" ];
+  then
+    CONNECTOR_VERSION_LIST_CONFLUENTHUB="$VERSION"
+  else
+    CONNECTOR_VERSION_LIST_CONFLUENTHUB+=" $VERSION"
+  fi
+done
+
+echo "$CONNECTOR_VERSION_LIST_CONFLUENTHUB"
+
+echo "-----"
+
+CONNECTOR_VERSION_CONFLUENTHUB=($CONNECTOR_VERSION_LIST_CONFLUENTHUB)
+#CONNECTOR_PACKAGE_LIST=($CONNECTOR_PACKAGE_LIST)
+
+CONNECTOR_NAMES_TO_PATCH=""
+
+for ((i=0; i<$CONNECTOR_COUNT; i++));
+do
+  echo "$i = [ Config Version: ${CONNECTOR_VERSION[$i]} , Confluent Hub Version: ${CONNECTOR_VERSION_CONFLUENTHUB[$i]} ]"
+  if [ "${CONNECTOR_VERSION[$i]}" != "${CONNECTOR_VERSION_CONFLUENTHUB[$i]}" ]; then
+    echo "Versions are different"
+
+    if [ -z "$CONNECTOR_NAMES_TO_PATCH" ];
+    then
+      CONNECTOR_NAMES_TO_PATCH="${CONNECTOR_PACKAGE_LIST[$i]}"
+    else
+      CONNECTOR_NAMES_TO_PATCH+=" ${CONNECTOR_PACKAGE_LIST[$i]}"
+    fi
+  else
+    echo "Versions are the same"
+
+    if [ -z "$CONNECTOR_NAMES_TO_PATCH" ];
+    then
+      CONNECTOR_NAMES_TO_PATCH="NULL"
+    else
+      CONNECTOR_NAMES_TO_PATCH+=" NULL"
+    fi
+  fi
+done
+
+echo "Connectors to Patch: $CONNECTOR_NAMES_TO_PATCH"
+
+echo "-----"
+
+echo "Kafka Connect Configuration File:"
+cat $KAFKA_CONNECT_CONFIGURATION_FILE
+
+SEARCH_STR="connect.yaml"
+REPLACEMENT_STR="connect-original.yaml"
+KAFKA_CONNECT_CONFIGURATION_BACKUP_FILE=${KAFKA_CONNECT_CONFIGURATION_FILE/$SEARCH_STR/$REPLACEMENT_STR}
+echo "Kafka Connect Configuration Backup File: $KAFKA_CONNECT_CONFIGURATION_BACKUP_FILE"
+
+cp $KAFKA_CONNECT_CONFIGURATION_FILE $KAFKA_CONNECT_CONFIGURATION_BACKUP_FILE
+
+yq eval -i '(.spec.build.onDemand.plugins.confluentHub[] | select(.name == "kafka-connect-salesforce-bulk-api").version) |= "2.0.21"' $KAFKA_CONNECT_CONFIGURATION_FILE
+
+echo "Kafka Connect Configuration File (AFTER CHANGES #1):"
+cat $KAFKA_CONNECT_CONFIGURATION_FILE
+
+cp $KAFKA_CONNECT_CONFIGURATION_BACKUP_FILE $KAFKA_CONNECT_CONFIGURATION_FILE
+
+yq eval -i '(.spec.build.onDemand.plugins.confluentHub[] | select(.name == "connect-transforms").version) |= "1.5.0"' $KAFKA_CONNECT_CONFIGURATION_FILE
+
+echo "Kafka Connect Configuration File (AFTER CHANGES #2):"
+cat $KAFKA_CONNECT_CONFIGURATION_FILE
+
+cp $KAFKA_CONNECT_CONFIGURATION_BACKUP_FILE $KAFKA_CONNECT_CONFIGURATION_FILE
+
+rm $KAFKA_CONNECT_CONFIGURATION_BACKUP_FILE
+
+echo "-----"
+
+WHICH_GIT=$(which git)
+if [ -z "$WHICH_GIT" ]; then
+  echo "Git is not installed"
+else
+  echo "Git is installed"
+fi
