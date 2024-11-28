@@ -28,7 +28,7 @@ spec:
             version: 4.1.2
           - name: connect-transforms
             owner: confluentinc
-            version: 1.6.0
+            version: 1.6.1
           - name: kafka-connect-sftp
             owner: confluentinc
             version: 3.2.10
