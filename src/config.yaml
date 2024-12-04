@@ -34,7 +34,7 @@ spec:
             version: 3.2.10
           - name: kafka-connect-azure-blob-storage-source
             owner: confluentinc
-            version: 2.6.8
+            version: 2.6.9
         url:
           - name: kafka-connect-file-pulse
             archivePath: https://github.com/streamthoughts/kafka-connect-file-pulse/releases/download/v2.14.1/streamthoughts-kafka-connect-file-pulse-2.14.1.zip
