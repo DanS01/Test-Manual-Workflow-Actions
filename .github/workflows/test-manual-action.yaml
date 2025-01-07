@@ -29,12 +29,10 @@ jobs:
       connector-versions-confluenthub: ${{ steps.fetch-connector-versions-confluenthub.outputs.connector-versions }}
       connector-list-to-patch: ${{ steps.compare-connector-versions.outputs.connector-list-to-patch }}
     steps:
-      - name: Checkout Kafka Connect Base Configuration File
+      - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          sparse-checkout: |
-            ${{ env.KAFKA_CONNECT_BASE_CONFIGURATION_FILE }}
-          sparse-checkout-cone-mode: false
+          fetch-depth: '0'
 
       - name: Fetch Connector Details from Kafka Connect Configuration
         id: fetch-connector-details
