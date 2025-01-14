@@ -11,11 +11,11 @@ CONNECTOR_PACKAGE_LIST=""
 CONNECTOR_OWNER_LIST=""
 CONNECTOR_VERSION_LIST=""
 
-for ((i=0; i<$CONNECTOR_COUNT; i++));
+for ((i=0; i<CONNECTOR_COUNT; i++));
 do
-    CONNECTOR_NAME="$(echo $CONNECTOR_PLUGINS_LIST_CONFIG | jq --raw-output --argjson index $i '.[$index] | .name')"
-    CONNECTOR_OWNER="$(echo $CONNECTOR_PLUGINS_LIST_CONFIG | jq --raw-output --argjson index $i '.[$index] | .owner')"
-    CONNECTOR_VERSION="$(echo $CONNECTOR_PLUGINS_LIST_CONFIG | jq --raw-output --argjson index $i '.[$index] | .version')"
+    CONNECTOR_NAME="$(echo "$CONNECTOR_PLUGINS_LIST_CONFIG" | jq --raw-output --argjson index "$i" '.[$index] | .name')"
+    CONNECTOR_OWNER="$(echo "$CONNECTOR_PLUGINS_LIST_CONFIG" | jq --raw-output --argjson index "$i" '.[$index] | .owner')"
+    CONNECTOR_VERSION="$(echo "$CONNECTOR_PLUGINS_LIST_CONFIG" | jq --raw-output --argjson index "$i" '.[$index] | .version')"
     echo "$i = [ Name: $CONNECTOR_NAME , Owner: $CONNECTOR_OWNER , Version: $CONNECTOR_VERSION ]"
 
     if [ -z "$CONNECTOR_PACKAGE_LIST" ];

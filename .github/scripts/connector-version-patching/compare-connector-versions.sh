@@ -15,7 +15,7 @@ read -a CONNECTOR_VERSIONS_CONFLUENTHUB <<< "$CONNECTOR_VERSIONS_CONFLUENTHUB"
 
 CONNECTOR_NAMES_TO_PATCH=""
 
-for ((i=0; i<$CONNECTOR_COUNT; i++));
+for ((i=0; i<CONNECTOR_COUNT; i++));
 do
     echo "$i = [ Name: ${CONNECTOR_PACKAGE_LIST[$i]} , Config Version: ${CONNECTOR_VERSIONS[$i]} , Confluent Hub Version: ${CONNECTOR_VERSIONS_CONFLUENTHUB[$i]} ]"
 
@@ -43,8 +43,9 @@ done
 
 echo ""
 echo "List of connectors to be patched:"
-CONNECTOR_NAMES_TO_PATCH_DISPLAY=($CONNECTOR_NAMES_TO_PATCH)
-for ((i=0; i<$CONNECTOR_COUNT; i++));
+#CONNECTOR_NAMES_TO_PATCH_DISPLAY=($CONNECTOR_NAMES_TO_PATCH)
+read -a CONNECTOR_NAMES_TO_PATCH_DISPLAY <<< "$CONNECTOR_NAMES_TO_PATCH"
+for ((i=0; i<CONNECTOR_COUNT; i++));
 do
     if [ "${CONNECTOR_NAMES_TO_PATCH_DISPLAY[$i]}" != "NULL" ];
     then

@@ -15,9 +15,9 @@ read -a CONNECTOR_VERSIONS <<< "$CONNECTOR_VERSIONS"
 
 CONNECTOR_VERSION_LIST_CONFLUENTHUB=""
 
-for ((i=0; i<$CONNECTOR_COUNT; i++));
+for ((i=0; i<CONNECTOR_COUNT; i++));
 do
-    if [ ! -z "$CONNECTOR_VERSION_LIST_CONFLUENTHUB" ];
+    if [ -n "$CONNECTOR_VERSION_LIST_CONFLUENTHUB" ];
     then
         echo ""
     fi
@@ -34,17 +34,17 @@ do
     VERSION="${VERSION//${stringVersionEnd}*}"
     echo "Confluent Hub Version: $VERSION"
 
-    if [ ${CONNECTOR_PACKAGE_LIST[$i]} = "kafka-connect-jdbc" ];
+    if [ "${CONNECTOR_PACKAGE_LIST[$i]}" = "kafka-connect-jdbc" ];
     then
         VERSION="10.8.2"
         echo "Version Override: $VERSION"
     fi
-    if [ ${CONNECTOR_PACKAGE_LIST[$i]} = "connect-transforms" ];
+    if [ "${CONNECTOR_PACKAGE_LIST[$i]}" = "connect-transforms" ];
     then
         VERSION="1.6.2"
         echo "Version Override: $VERSION"
     fi
-    if [ ${CONNECTOR_PACKAGE_LIST[$i]} = "kafka-connect-salesforce" ];
+    if [ "${CONNECTOR_PACKAGE_LIST[$i]}" = "kafka-connect-salesforce" ];
     then
         VERSION="2.0.25"
         echo "Version Override: $VERSION"

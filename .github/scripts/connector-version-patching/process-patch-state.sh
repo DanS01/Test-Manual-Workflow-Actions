@@ -17,7 +17,7 @@ REPO_PULL_REQUESTS=$(curl --silent -H "Accept: application/vnd.github.v3+json" "
 BRANCHES_TO_CREATE=""
 PULL_REQUESTS_TO_UPDATE=""
 
-for ((i=0; i<$CONNECTOR_COUNT; i++));
+for ((i=0; i<CONNECTOR_COUNT; i++));
 do
     if [ "${CONNECTOR_LIST_TO_PATCH[$i]}" == "NULL" ];
     then
@@ -116,7 +116,8 @@ VALID_PULL_REQUESTS="false"
 
 echo ""
 echo "List of branches to create:"
-BRANCHES_TO_CREATE_DISPLAY=($BRANCHES_TO_CREATE)
+#BRANCHES_TO_CREATE_DISPLAY=($BRANCHES_TO_CREATE)
+read -a BRANCHES_TO_CREATE_DISPLAY <<< "$BRANCHES_TO_CREATE"
 for ((i=0; i<$CONNECTOR_COUNT; i++));
 do
     if [ "${BRANCHES_TO_CREATE_DISPLAY[$i]}" != "NULL" ];
@@ -128,7 +129,8 @@ done
 
 echo ""
 echo "List of pull requests to update:"
-PULL_REQUESTS_TO_UPDATE_DISPLAY=($PULL_REQUESTS_TO_UPDATE)
+#PULL_REQUESTS_TO_UPDATE_DISPLAY=($PULL_REQUESTS_TO_UPDATE)
+read -a PULL_REQUESTS_TO_UPDATE_DISPLAY <<< "$PULL_REQUESTS_TO_UPDATE"
 for ((i=0; i<$CONNECTOR_COUNT; i++));
 do
     if [ "${PULL_REQUESTS_TO_UPDATE_DISPLAY[$i]}" != "NULL" ];
