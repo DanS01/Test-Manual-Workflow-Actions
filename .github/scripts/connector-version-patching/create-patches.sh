@@ -6,21 +6,25 @@ echo "Github Repository: $GITHUB_REPOSITORY"
 
 echo "Connector Count: $CONNECTOR_COUNT"
 echo "Connector List to Patch: $CONNECTOR_LIST_TO_PATCH"
-CONNECTOR_LIST_TO_PATCH=($CONNECTOR_LIST_TO_PATCH)
+#CONNECTOR_LIST_TO_PATCH=($CONNECTOR_LIST_TO_PATCH)
+read -a CONNECTOR_LIST_TO_PATCH <<< "$CONNECTOR_LIST_TO_PATCH"
 echo "Connector Versions: $CONNECTOR_VERSIONS"
-CONNECTOR_VERSIONS=($CONNECTOR_VERSIONS)
+#CONNECTOR_VERSIONS=($CONNECTOR_VERSIONS)
+read -a CONNECTOR_VERSIONS <<< "$CONNECTOR_VERSIONS"
 echo "Connector Versions Confluent Hub: $CONNECTOR_VERSIONS_CONFLUENTHUB"
-CONNECTOR_VERSIONS_CONFLUENTHUB=($CONNECTOR_VERSIONS_CONFLUENTHUB)
+#CONNECTOR_VERSIONS_CONFLUENTHUB=($CONNECTOR_VERSIONS_CONFLUENTHUB)
+read -a CONNECTOR_VERSIONS_CONFLUENTHUB <<< "$CONNECTOR_VERSIONS_CONFLUENTHUB"
 echo "Branches to Create: $BRANCHES_TO_CREATE"
-BRANCHES_TO_CREATE=($BRANCHES_TO_CREATE)
+#BRANCHES_TO_CREATE=($BRANCHES_TO_CREATE)
+read -a BRANCHES_TO_CREATE <<< "$BRANCHES_TO_CREATE"
 echo "Valid Branches: $VALID_BRANCHES"
 
-if [ $VALID_BRANCHES = "false" ];
+if [ "$VALID_BRANCHES" = "false" ];
 then
     echo "No branches / pull requests to create"
 fi
 
-for ((i=0; i<$CONNECTOR_COUNT; i++));
+for ((i=0; i<CONNECTOR_COUNT; i++));
 do
     if [ "${BRANCHES_TO_CREATE[$i]}" != "NULL" ];
     then
@@ -34,7 +38,7 @@ do
         export CHUB_CONNECTOR_NAME="${CONNECTOR_LIST_TO_PATCH[$i]}"
         export CHUB_VERSION="${CONNECTOR_VERSIONS_CONFLUENTHUB[$i]}"
 
-        yq eval -i '(.spec.build.onDemand.plugins.confluentHub[] | select(.name == env(CHUB_CONNECTOR_NAME)).version) |= env(CHUB_VERSION)' $KAFKA_CONNECT_BASE_CONFIGURATION_FILE
+        yq eval -i '(.spec.build.onDemand.plugins.confluentHub[] | select(.name == env(CHUB_CONNECTOR_NAME)).version) |= env(CHUB_VERSION)' "$KAFKA_CONNECT_BASE_CONFIGURATION_FILE"
 
         echo "Committing changes to branch..."
         git config user.name "$GITHUB_ACTIONS_BOT_NAME"

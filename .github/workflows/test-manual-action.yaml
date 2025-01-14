@@ -173,7 +173,7 @@ jobs:
           echo "Branches to Create: $BRANCHES_TO_CREATE"
           echo "Valid Branches: $VALID_BRANCHES"
 
-          #source .github/scripts/connector-version-patching/create-patches.sh
+          source .github/scripts/connector-version-patching/create-patches.sh
       
       - name: Update Existing Patches
         id: update-existing-patches
@@ -195,4 +195,4 @@ jobs:
           echo "Pull Requests to Update: $PULL_REQUESTS_TO_UPDATE"
           echo "Valid Pull Requests: $VALID_PULL_REQUESTS"
 
-          #source .github/scripts/connector-version-patching/update-patches.sh
+          source .github/scripts/connector-version-patching/update-patches.sh
