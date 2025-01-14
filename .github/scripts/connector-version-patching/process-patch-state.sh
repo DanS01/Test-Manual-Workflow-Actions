@@ -139,3 +139,7 @@ do
         VALID_PULL_REQUESTS="true"
     fi
 done
+
+echo ""
+echo "Flag VALID_BRANCHES set to $VALID_BRANCHES"
+echo "Flag VALID_PULL_REQUESTS set to $VALID_PULL_REQUESTS"
