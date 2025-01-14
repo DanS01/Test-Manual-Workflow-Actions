@@ -3,13 +3,196 @@ name: Test Manual Action
 
 on:
   workflow_dispatch:
-          
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  GITHUB_ACTIONS_BOT_NAME: github-actions[bot]
+  GITHUB_ACTIONS_BOT_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+#  KAFKA_CONNECT_BASE_CONFIGURATION_FILE: apps/kafka-connect/base/connect.yaml
+  KAFKA_CONNECT_BASE_CONFIGURATION_FILE: src/config.yaml
+#  REPOSITORY_BASE_BRANCH: main
+  REPOSITORY_BASE_BRANCH: feature/test-patching-workflow
+
 jobs:
-  test:
-    name: Test
+  analyze-connector-plugin-configuration:
+    name: Analyze Connector Plugin Configuration
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
+    outputs:
+      connector-count: ${{ steps.fetch-connector-details.outputs.connector-count }}
+      connector-list: ${{ steps.fetch-connector-details.outputs.connector-list }}
+      connector-owners: ${{ steps.fetch-connector-details.outputs.connector-owners }}
+      connector-versions: ${{ steps.fetch-connector-details.outputs.connector-versions }}
+      connector-versions-confluenthub: ${{ steps.fetch-connector-versions-confluenthub.outputs.connector-versions }}
+      connector-list-to-patch: ${{ steps.compare-connector-versions.outputs.connector-list-to-patch }}
     steps:
-      - name: Print to Console
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: '0'
+
+      - name: Fetch Connector Details from Kafka Connect Configuration
+        id: fetch-connector-details
+        shell: bash
         run: |
-            echo "Hello World!"
+          source .github/scripts/connector-version-patching/fetch-config-connector-versions.sh
+
+          echo "connector-count=$CONNECTOR_COUNT" >> $GITHUB_OUTPUT
+          echo "connector-list=$CONNECTOR_PACKAGE_LIST" >> $GITHUB_OUTPUT
+          echo "connector-owners=$CONNECTOR_OWNER_LIST" >> $GITHUB_OUTPUT
+          echo "connector-versions=$CONNECTOR_VERSION_LIST" >> $GITHUB_OUTPUT
+
+      - name: Fetch Connector Versions from Confluent Hub
+        id: fetch-connector-versions-confluenthub
+        shell: bash
+        env:
+          CONNECTOR_COUNT: "${{ steps.fetch-connector-details.outputs.connector-count }}"
+          CONNECTOR_PACKAGE_LIST: "${{ steps.fetch-connector-details.outputs.connector-list }}"
+          CONNECTOR_OWNERS: "${{ steps.fetch-connector-details.outputs.connector-owners }}"
+          CONNECTOR_VERSIONS: "${{ steps.fetch-connector-details.outputs.connector-versions }}"
+        run: |
+          echo "Connector Count: $CONNECTOR_COUNT"
+          echo "Connector Package List: $CONNECTOR_PACKAGE_LIST"
+          echo "Connector Owners: $CONNECTOR_OWNERS"
+          echo "Connector Versions: $CONNECTOR_VERSIONS"
+
+          source .github/scripts/connector-version-patching/fetch-confluent-hub-connector-versions.sh
+
+          echo "connector-versions=$CONNECTOR_VERSION_LIST_CONFLUENTHUB" >> $GITHUB_OUTPUT
+
+      - name: Compare Connector Versions and Determine Connectors to Patch
+        id: compare-connector-versions
+        shell: bash
+        env:
+          CONNECTOR_COUNT: "${{ steps.fetch-connector-details.outputs.connector-count }}"
+          CONNECTOR_PACKAGE_LIST: "${{ steps.fetch-connector-details.outputs.connector-list }}"
+          CONNECTOR_VERSIONS: "${{ steps.fetch-connector-details.outputs.connector-versions }}"
+          CONNECTOR_VERSIONS_CONFLUENTHUB: "${{ steps.fetch-connector-versions-confluenthub.outputs.connector-versions }}"
+        run: |
+          echo "Connector Count: $CONNECTOR_COUNT"
+          echo "Connector Package List: $CONNECTOR_PACKAGE_LIST"
+          echo "Connector Versions: $CONNECTOR_VERSIONS"
+          echo "Connector Versions Confluent Hub: $CONNECTOR_VERSIONS_CONFLUENTHUB"
+
+          source .github/scripts/connector-version-patching/compare-connector-versions.sh
+
+          echo "connector-list-to-patch=$CONNECTOR_NAMES_TO_PATCH" >> $GITHUB_OUTPUT
+
+  manage-connector-version-patching-notifications:
+    name: Manage Connector Version Patching Notifications
+    runs-on: ubuntu-latest
+    needs: analyze-connector-plugin-configuration
+    timeout-minutes: 30
+    outputs:
+      branches-to-create: ${{ steps.repo-branch-patch-state.outputs.branches-to-create }}
+      pull-requests-to-update: ${{ steps.repo-branch-patch-state.outputs.pull-requests-to-update }}
+    steps:
+      - name: Verify CLI Tools
+        shell: bash
+        run: |
+          # Check if Git CLI exists, if not then install it
+          echo "Cheking Git..."
+          WHICH_GIT=$(which git)
+          if [ -z "$WHICH_GIT" ];
+          then
+            echo "Git is not installed"
+            sudo apt-get install -y git
+            git --version
+            PATH=$PATH:$(which git)
+            echo "Path is ... $PATH"
+          else
+            echo "Git is installed"
+            git --version
+          fi
+
+          # Check if yq CLI exists, if not then install it (specifically the mikefarah one)
+          echo "Checking yq..."
+          WHICH_YQ=$(which yq)
+          if [ -z "$WHICH_YQ" ];
+          then
+            echo "yq is not installed"
+            sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq && sudo chmod +x /usr/bin/yq
+            yq --version
+            PATH=$PATH:$(which yq)
+            echo "Path is ... $PATH"
+          else
+            echo "yq is installed"
+            yq --version
+          fi
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: '0'
+
+      - name: Compare Repository Branches and Determine Required Patch State
+        id: repo-branch-patch-state
+        shell: bash
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CONNECTOR_COUNT: "${{ needs.analyze-connector-plugin-configuration.outputs.connector-count }}"
+          CONNECTOR_LIST_TO_PATCH: "${{ needs.analyze-connector-plugin-configuration.outputs.connector-list-to-patch }}"
+          CONNECTOR_VERSIONS_CONFLUENTHUB: "${{ needs.analyze-connector-plugin-configuration.outputs.connector-versions-confluenthub }}"
+        run: |
+          echo "Connector Count: $CONNECTOR_COUNT"
+          echo "Connector List to Patch: $CONNECTOR_LIST_TO_PATCH"
+          echo "Connector Versions Confluent Hub: $CONNECTOR_VERSIONS_CONFLUENTHUB"
+
+          source .github/scripts/connector-version-patching/process-patch-state.sh
+          
+          echo "Branches To Create: $BRANCHES_TO_CREATE"
+          echo "Pull Requests To Update: $PULL_REQUESTS_TO_UPDATE"
+          echo "Valid Branches: $VALID_BRANCHES"
+          echo "Valid Pull Requests: $VALID_PULL_REQUESTS"
+
+          echo "branches-to-create=$BRANCHES_TO_CREATE" >> $GITHUB_OUTPUT
+          echo "pull-requests-to-update=$PULL_REQUESTS_TO_UPDATE" >> $GITHUB_OUTPUT
+          echo "is-valid-branches=$VALID_BRANCHES" >> $GITHUB_OUTPUT
+          echo "is-valid-pull-requests=$VALID_PULL_REQUESTS" >> $GITHUB_OUTPUT
+
+      - name: Create New Patches
+        id: create-new-patches
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CONNECTOR_COUNT: "${{ needs.analyze-connector-plugin-configuration.outputs.connector-count }}"
+          CONNECTOR_LIST_TO_PATCH: "${{ needs.analyze-connector-plugin-configuration.outputs.connector-list-to-patch }}"
+          CONNECTOR_VERSIONS: "${{ needs.analyze-connector-plugin-configuration.outputs.connector-versions }}"
+          CONNECTOR_VERSIONS_CONFLUENTHUB: "${{ needs.analyze-connector-plugin-configuration.outputs.connector-versions-confluenthub }}"
+          BRANCHES_TO_CREATE: "${{ steps.repo-branch-patch-state.outputs.branches-to-create }}"
+          VALID_BRANCHES: "${{ steps.repo-branch-patch-state.outputs.is-valid-branches }}"
+        run: |
+          echo "Connector Count: $CONNECTOR_COUNT"
+          echo "Connector List to Patch: $CONNECTOR_LIST_TO_PATCH"
+          echo "Connector Versions: $CONNECTOR_VERSIONS"
+          echo "Connector Versions Confluent Hub: $CONNECTOR_VERSIONS_CONFLUENTHUB"
+          echo "Branches to Create: $BRANCHES_TO_CREATE"
+          echo "Valid Branches: $VALID_BRANCHES"
+
+          source .github/scripts/connector-version-patching/create-patches.sh
+      
+      - name: Update Existing Patches
+        id: update-existing-patches
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CONNECTOR_COUNT: "${{ needs.analyze-connector-plugin-configuration.outputs.connector-count }}"
+          CONNECTOR_LIST_TO_PATCH: "${{ needs.analyze-connector-plugin-configuration.outputs.connector-list-to-patch }}"
+          CONNECTOR_VERSIONS: "${{ needs.analyze-connector-plugin-configuration.outputs.connector-versions }}"
+          CONNECTOR_VERSIONS_CONFLUENTHUB: "${{ needs.analyze-connector-plugin-configuration.outputs.connector-versions-confluenthub }}"
+          PULL_REQUESTS_TO_UPDATE: "${{ steps.repo-branch-patch-state.outputs.pull-requests-to-update }}"
+          VALID_PULL_REQUESTS: "${{ steps.repo-branch-patch-state.outputs.is-valid-pull-requests }}"
+        run: |
+          echo "Connector Count: $CONNECTOR_COUNT"
+          echo "Connector List to Patch: $CONNECTOR_LIST_TO_PATCH"
+          echo "Connector Versions: $CONNECTOR_VERSIONS"
+          echo "Connector Versions Confluent Hub: $CONNECTOR_VERSIONS_CONFLUENTHUB"
+          echo "Pull Requests to Update: $PULL_REQUESTS_TO_UPDATE"
+          echo "Valid Pull Requests: $VALID_PULL_REQUESTS"
+
+          source .github/scripts/connector-version-patching/update-patches.sh
